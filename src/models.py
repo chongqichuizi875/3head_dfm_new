@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from loss import three_head_loss, exploss
+from loss import three_head_loss, exploss, default_bce_loss
 from utils import generate_meshgrid, sigmoid, compute_ips
 
 torch.manual_seed(2020)
@@ -35,7 +35,8 @@ class MF(nn.Module):
 
     def predict(self, x):
         with torch.no_grad():
-            x = torch.tensor(x).to(torch.int)
+            # x = torch.tensor(x).to(torch.int)
+            x = x.clone().detach()
             pred, emb = self.forward(x)
             pred = self.sigmoid(pred).cpu().numpy()
             return pred, emb.cpu().numpy()
@@ -54,11 +55,14 @@ class MF(nn.Module):
         total_batch = num_sample // batch_size
         early_stop = 0
         x = torch.from_numpy(x).to(torch.int)
+        if batch_size > num_sample:
+            batch_size = num_sample
+            total_batch = 0
         for epoch in range(num_epoch):
             all_idx = np.arange(num_sample)
             np.random.shuffle(all_idx)
             epoch_loss = 0
-            for idx in range(total_batch+1):
+            for idx in range(total_batch + 1):
                 # mini-batch training
                 if idx == total_batch:
                     selected_idx = all_idx[batch_size * idx:]
@@ -132,6 +136,11 @@ class MF_DR(MF):
         else:
             prior_y = y_ips.mean()
         early_stop = 0
+        if batch_size > num_sample:
+            batch_size = num_sample
+            total_batch = 0
+        x = torch.from_numpy(x).to(torch.int)
+        x_all = torch.from_numpy(x_all).to(torch.int)
         for epoch in range(num_epoch):
             all_idx = np.arange(num_sample)  # observation
             np.random.shuffle(all_idx)
@@ -142,10 +151,17 @@ class MF_DR(MF):
 
             epoch_loss = 0
 
-            for idx in range(total_batch):
+            for idx in range(total_batch + 1):
                 # mini-batch training
-
-                selected_idx = all_idx[batch_size * idx:(idx + 1) * batch_size]
+                if idx == total_batch:
+                    selected_idx = all_idx[batch_size * idx:]
+                    last_batch = num_sample - idx * batch_size
+                    x_sampled = x_all[ul_idxs[G * idx * batch_size:G * idx * batch_size + last_batch]]
+                    imputation_y = torch.Tensor([prior_y] * G * last_batch).cuda(const.CUDA_DEVICE)
+                else:
+                    selected_idx = all_idx[batch_size * idx:(idx + 1) * batch_size]
+                    x_sampled = x_all[ul_idxs[G * idx * batch_size: G * (idx + 1) * batch_size]]
+                    imputation_y = torch.Tensor([prior_y] * G * batch_size).cuda(const.CUDA_DEVICE)
                 sub_x = x[selected_idx]
                 sub_y = y[selected_idx]
                 # propensity score
@@ -156,21 +172,18 @@ class MF_DR(MF):
                 pred = self.forward(sub_x, True)
                 pred = self.sigmoid(pred)
 
-                x_sampled = x_all[ul_idxs[G * idx * batch_size: G * (idx + 1) * batch_size]]
-
                 pred_ul = self.forward(x_sampled, True)
                 pred_ul = self.sigmoid(pred_ul)
 
-                xent_loss = F.binary_cross_entropy(pred, sub_y, weight=inv_prop, reduction="sum")  # o*eui/pui
+                xent_loss = F.binary_cross_entropy(pred, sub_y, weight=inv_prop, reduction="mean")  # o*eui/pui
 
-                imputation_y = torch.Tensor([prior_y] * G * batch_size).cuda(const.CUDA_DEVICE)
-                imputation_loss = F.binary_cross_entropy(pred, imputation_y[0:batch_size], reduction="sum")  # e^ui
+                imputation_loss = F.binary_cross_entropy(pred, imputation_y, reduction="mean")  # e^ui
 
-                ips_loss = (xent_loss - imputation_loss) / batch_size
+                ips_loss = xent_loss - imputation_loss
                 # direct loss
-                direct_loss = F.binary_cross_entropy(pred_ul, imputation_y, reduction="sum")
+                direct_loss = F.binary_cross_entropy(pred_ul, imputation_y, reduction="mean")
 
-                loss = (ips_loss + direct_loss) / (x_sampled.shape[0])
+                loss = ips_loss + direct_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -200,6 +213,11 @@ class MF_DR_JL(MF):
         self.imputation = MF(
             num_users=self.num_users, num_items=self.num_items, embedding_k=self.embedding_k)
 
+    def predict(self, x):
+        pred, emb = self.prediction_model.predict(x)
+        pred = self.sigmoid(torch.tensor(pred)).detach().cpu().numpy()
+        return pred, emb
+
     def fit(self, x, y, hyper, y_ips=None):
         num_epoch = hyper["num_epoch"]
         batch_size = hyper["batch_size"]
@@ -220,6 +238,11 @@ class MF_DR_JL(MF):
         total_batch = num_sample // batch_size
         one_over_zl = compute_ips(x, y, y_ips)
         early_stop = 0
+        if batch_size > num_sample:
+            batch_size = num_sample
+            total_batch = 0
+        x = torch.from_numpy(x).to(torch.int)
+        x_all = torch.from_numpy(x_all).to(torch.int)
         for epoch in range(num_epoch):
             all_idx = np.arange(num_sample)  # observation
             np.random.shuffle(all_idx)
@@ -229,9 +252,16 @@ class MF_DR_JL(MF):
             np.random.shuffle(ul_idxs)
 
             epoch_loss = 0
-            for idx in range(total_batch):
+
+            for idx in range(total_batch + 1):
                 # mini-batch training
-                selected_idx = all_idx[batch_size * idx:(idx + 1) * batch_size]
+                if idx == total_batch:
+                    selected_idx = all_idx[batch_size * idx:]
+                    last_batch = num_sample - idx * batch_size
+                    x_sampled = x_all[ul_idxs[G * idx * batch_size:G * idx * batch_size + last_batch]]
+                else:
+                    selected_idx = all_idx[batch_size * idx:(idx + 1) * batch_size]
+                    x_sampled = x_all[ul_idxs[G * idx * batch_size: G * (idx + 1) * batch_size]]
                 sub_x = x[selected_idx]
                 sub_y = y[selected_idx]
 
@@ -244,8 +274,6 @@ class MF_DR_JL(MF):
                 pred = self.sigmoid(pred)
                 imputation_y = self.sigmoid(torch.tensor(imputation_y)).cuda(const.CUDA_DEVICE)
 
-                x_sampled = x_all[ul_idxs[G * idx * batch_size: G * (idx + 1) * batch_size]]
-
                 pred_u, _ = self.prediction_model.forward(x_sampled)
                 imputation_y1, _ = self.imputation.predict(x_sampled)
                 pred_u = self.sigmoid(pred_u)
@@ -254,10 +282,10 @@ class MF_DR_JL(MF):
                 xent_loss = F.binary_cross_entropy(pred, sub_y, weight=inv_prop, reduction="mean")  # o*eui/pui
                 imputation_loss = F.binary_cross_entropy(pred, imputation_y, reduction="mean")
 
-                ips_loss = (xent_loss - imputation_loss) / selected_idx.shape[0]
+                ips_loss = xent_loss - imputation_loss
                 # direct loss
                 direct_loss = F.binary_cross_entropy(pred_u, imputation_y1, reduction="mean")
-                direct_loss = (direct_loss) / (x_sampled.shape[0])
+                direct_loss = direct_loss
 
                 loss = ips_loss + direct_loss
                 optimizer_prediction.zero_grad()
@@ -272,7 +300,7 @@ class MF_DR_JL(MF):
                 imputation_y = self.sigmoid(imputation_y)
                 e_loss = F.binary_cross_entropy(pred, sub_y, reduction="none")
                 e_hat_loss = F.binary_cross_entropy(imputation_y, pred, reduction="none")
-                imp_loss = (((e_loss - e_hat_loss) ** 2) * inv_prop).sum()
+                imp_loss = (((e_loss - e_hat_loss) ** 2) * inv_prop).mean()
                 optimizer_imputation.zero_grad()
                 imp_loss.backward()
                 optimizer_imputation.step()
@@ -297,7 +325,8 @@ def get_model(name, params):
         return MLP(params, exploss)
     elif name == "MLP_tn_dp_3head":
         return MLP(params, three_head_loss)
-
+    elif name == "MLP_tn_dp_default":
+        return MLP(params, default_bce_loss)
     else:
         raise NotImplementedError()
 
@@ -309,7 +338,8 @@ class MLP(nn.Module):
         self.relu = nn.Sigmoid()
         self.lrelu = nn.LeakyReLU()
         self.loss = loss
-        if params["data"] == "criteo":
+        self.name = params["data"]
+        if self.name == "criteo":
             self.feature_dim = const.NUMERICAL_EMB_SIZE + const.CATEGORICAL_EMB_SIZE
             self.fc0 = torch.nn.Linear(self.feature_dim, 512)
             self.bn0 = nn.BatchNorm1d(256)
@@ -331,9 +361,9 @@ class MLP(nn.Module):
 
     def forward(self, x):
         x = self.fc0(x)
-        x = self.bn0(x)
-        x = self.relu(x)
-
+        # if self.name != "criteo":
+        #     x = self.bn0(x)
+        #     x = self.relu(x)
         x = self.fc1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -370,6 +400,7 @@ class MLP(nn.Module):
                 pred = self.forward(sub_x)
 
                 loss = self.loss(sub_labels, pred)
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()

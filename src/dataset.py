@@ -1,4 +1,7 @@
 import copy
+
+from numpy import int8
+
 from utils import *
 import numpy as np
 import os
@@ -83,11 +86,12 @@ def generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item)
     embedding_k = 8
     mf = MF(num_user, num_item, embedding_k=embedding_k)
     mf.cuda(const.CUDA_DEVICE)
-    hyper = {"num_epoch": 300, "batch_size": 512, "lr": 0.01, "lamb": 1e-4, "tol": 1e-5, "verbose": False, "G": 1}
-    mf.fit(x_train, y_train, hyper, y_ips=y_train_sparse)
+    hyper = {"num_epoch": 1000, "batch_size": 8192, "lr": 0.01, "lamb": 1e-4, "tol": 1e-5, "verbose": 1, "G": 1}
+    # mf.fit(x_train, y_train, hyper, y_ips=O_train_sparse)
+    mf.fit(x_train, y_train, hyper, y_ips=None)
     sample = generate_meshgrid(num_user, num_item)  # (87000, 2)
-    _, emb_train = mf.predict(sample)  # (87000, 1), (87000, 16)
-    _, emb_test = mf.predict(x_test)
+    _, emb_train = mf.predict(torch.from_numpy(sample))  # (87000, 1), (87000, 16)
+    _, emb_test = mf.predict(torch.from_numpy(x_test))
     sigma_h = 1
     W_d = np.random.normal(0, sigma_h, 2 * embedding_k)  # (16,)
     lbd = np.exp(np.dot(emb_train, W_d))  # (87000,)
@@ -216,7 +220,7 @@ def load_data(params):
             else:
                 numerical_emb_concat = hstack((numerical_emb_concat, dummy_matrix))
 
-        x = numerical_emb_concat.astype(bool).toarray()
+        x = numerical_emb_concat.astype(int8).toarray()
         # for i in range(0, 8):
         #     feat = torch.tensor(df.iloc[:, i].values)
         #     # Scale feature values to the range [0, num_bin_size[i]-1]

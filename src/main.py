@@ -36,6 +36,10 @@ def run_params(args):
                 params["loss"] = "3head_dfm_loss"
                 params["dataset"] = "tn_dp_pretrain_cut_hour_" + str(args.C)
                 params["model"] = "MLP_tn_dp_3head"
+            elif args.method == "dfm":
+                params["loss"] = "3head_dfm_loss"
+                params["dataset"] = "tn_dp_pretrain_cut_hour_" + str(args.C)
+                params["model"] = "MLP_tn_dp_default"
             else:
                 raise ValueError(
                     "{} method do not need pretraining other than Pretrain".format(args.method))
@@ -79,6 +83,10 @@ def run_params(args):
             params["loss"] = "3head_dfm_loss"
             params["dataset"] = "coat"
             params["model"] = "MLP_tn_dp_3head"
+        elif args.method == "dfm":
+            params["loss"] = "3head_dfm_loss"
+            params["dataset"] = "coat"
+            params["model"] = "MLP_tn_dp_default"
     elif args.data == "yahoo":
         if args.method == "ES-DFM":
             params["loss"] = "esdfm_loss"
@@ -88,6 +96,10 @@ def run_params(args):
             params["loss"] = "3head_dfm_loss"
             params["dataset"] = "yahoo"
             params["model"] = "MLP_tn_dp_3head"
+        elif args.method == "dfm":
+            params["loss"] = "3head_dfm_loss"
+            params["dataset"] = "yahoo"
+            params["model"] = "MLP_tn_dp_default"
 
     return params
 

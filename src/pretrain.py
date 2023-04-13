@@ -1,13 +1,17 @@
+import json
 import os.path
+from json import JSONDecodeError
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 from tqdm import tqdm
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, roc_curve
 from dataset import load_data
 from models import get_model
 import const
+import matplotlib.pyplot as plt
 
 # Disable gradient computation messages
 torch.set_grad_enabled(False)
@@ -51,25 +55,55 @@ def test(model, x_test, y_test, is_Training=False):
         else:
             all_labels = np.concatenate((all_labels, y_test[selected_idx]))
 
-    # for step, batch_x in enumerate(tqdm(x_test), 1):
-    #     batch_x = batch_x.reshape(1, -1)
-    #     logits = model(batch_x, training=False)["logits"]
-    #     all_logits.append(logits.numpy())
-    #     all_probs.append(tf.math.sigmoid(logits))
+    print(f"test set shape: {np.array(all_labels).shape}")
+    fpr, tpr, _ = roc_curve(all_labels, all_probs)
+    roc_auc = auc(fpr, tpr)
+    # roc_auc = roc_auc_score(all_labels, all_probs)
 
-    # all_logits = np.reshape(np.concatenate(all_logits, axis=0), (-1, 1))
-    # all_labels = np.reshape(np.concatenate(all_labels, axis=0), (-1, 1))
-    # all_probs = np.reshape(np.concatenate(all_probs, axis=0), (-1, 1))
-    # all_probs = np.reshape(all_probs, (-1, 1))
-    # all_labels = np.reshape(all_labels, (-1, 1))
-    # llloss = cal_llloss_with_logits(all_labels, all_logits)
+    precision, recall, thresholds = precision_recall_curve(all_labels, all_probs)
+    pr_auc = auc(recall, precision)
+    # fig, ax = plt.subplots()
+    # ax.plot(recall, precision, label='PR curve (AUC = {:.4f})'.format(pr_auc))
+    # ax.plot(fpr, tpr, label='ROC curve (AUC = {:.4f})'.format(roc_auc))
+    # ax.set_xlim([0.0, 1.0])
+    # ax.set_ylim([0.0, 1.0])
+    # ax.set_xlabel('Recall (True Positive Rate)')
+    # ax.set_ylabel('Precision (Positive Predictive Value)')
+    # ax.set_title('Precision-Recall and ROC Curves')
+    # ax.legend(loc='lower left')
 
-    # Example predicted probabilities for the positive class (1)
-    print(np.array(all_labels).shape)
-    auc = roc_auc_score(all_labels, all_probs)
-    # prauc = cal_prauc(all_labels, all_probs)
-    # batch_size = all_logits.shape[0]
-    return auc
+    group = {"data": model.name,
+             "loss": model.loss.__name__,
+             "fpr": fpr.tolist(),
+             "tpr": tpr.tolist(),
+             "recall": recall.tolist(),
+             "precision": precision.tolist(),
+             "pr_auc": pr_auc,
+             "roc_auc": roc_auc}
+    with open("results.json", 'a') as f:
+        pass
+    with open("results.json", 'r') as f:
+        try:
+            list1 = json.load(f)
+        except JSONDecodeError:
+            list1 = []
+    append_label = 1
+    with open("results.json", 'w') as f:
+        if len(list1) == 0:
+            list1 = [group]
+        else:
+            for index, g in enumerate(list1):
+                if group["loss"] == g["loss"] and group["data"] == g["data"]:
+                    list1[index] = group
+                    append_label = 0
+                    break
+
+            if append_label == 1:
+                list1.append(group)
+        json_objects = json.dumps(list1, indent=4)
+        f.write(json_objects)
+
+    return roc_auc, pr_auc
 
 
 # def optim_step(model, x, targets, optimizer, loss_fn, params):
@@ -130,7 +164,8 @@ def run(params):
 
     model = get_model(params["model"], params).cuda(const.CUDA_DEVICE)
     model.fit(x_train, y_train, batch_size=1048576)
-    train_auc = test(model, x_train, y_train, is_Training=True)
-    print("training auc: ", train_auc)
-    test_auc = test(model, x_test, y_test)
-    print("test auc: ", test_auc)
+    # train_auc = test(model, x_train, y_train, is_Training=True)
+    # print("training auc: ", train_auc)
+    roc_auc, pr_auc = test(model, x_test, y_test)
+    print(f"AUC-ROC: {roc_auc}, PR-AUC: {pr_auc}")
+    # plt.show()

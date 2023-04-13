@@ -1,8 +1,8 @@
 {
   "save_path": "run",
-  "method": "ES-DFM",
+  "method": "3head",
   "mode": "pretrain",
-  "data": "criteo",
-  "seed": 12456,
+  "data": "yahoo",
+  "seed": 89,
   "C": 0.25
 }
