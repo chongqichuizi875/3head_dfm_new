@@ -1,0 +1,8 @@
+{
+  "save_path": "run",
+  "method": "ES-DFM",
+  "mode": "pretrain",
+  "data": "criteo",
+  "seed": 12456,
+  "C": 0.25
+}
