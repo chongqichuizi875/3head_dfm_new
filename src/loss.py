@@ -39,6 +39,7 @@ def three_head_loss(targets, outputs):
     pc = torch.sigmoid(c)
     pos_loss = -(-stable_log1pex(o) - stable_log1pex(c) + log_lamb - lamb * d)
     neg_loss = -torch.log(1 - po + po * (1 - pc) + po * pc * torch.exp(-lamb * e))
+
     sum_loss = pos_loss * yobs * 1.5 + neg_loss * (1 - yobs)
     sum_loss[sum_loss.isnan()] = 0
     return torch.mean(sum_loss)
@@ -63,6 +64,17 @@ def exploss(targets, outputs):
 
 def default_bce_loss(targets, outputs):
     yobs = targets[:, 2].to(torch.float32)
+    c = outputs["C"]
+    pc = torch.sigmoid(c)
+    pos_loss = stable_log1pex(c)
+    neg_loss = -(1 - pc) * torch.log(1 - pc)
+    sum_loss = pos_loss * yobs + neg_loss * (1 - yobs)
+    sum_loss[sum_loss.isnan()] = 0
+    return torch.mean(sum_loss)
+
+
+def oracle_bce_loss(targets, outputs):
+    yobs = targets[:, 0].to(torch.float32)
     c = outputs["C"]
     pc = torch.sigmoid(c)
     pos_loss = stable_log1pex(c)

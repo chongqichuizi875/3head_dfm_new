@@ -25,6 +25,27 @@ num_bin_size = (64, 16, 128, 64, 128, 64, 512, 512)
 cate_bin_size = (512, 128, 256, 256, 64, 256, 256, 16, 256)
 
 
+def find_value_at_percentage(probs, percentage):
+    if percentage < 0 or percentage > 100:
+        raise ValueError("Percentage must be between 0 and 100")
+
+    sorted_probs = sorted(probs)
+    n = len(sorted_probs)
+
+    # Calculate the index corresponding to the percentage position
+    index = (n - 1) * percentage / 100
+
+    # If the index is an integer, the value is the corresponding element in the sorted list
+    if index.is_integer():
+        return sorted_probs[int(index)]
+    else:
+        # Otherwise, interpolate between the two nearest values
+        lower_index = int(index)
+        upper_index = lower_index + 1
+        weight = index - lower_index
+        return (1 - weight) * sorted_probs[lower_index] + weight * sorted_probs[upper_index]
+
+
 def one_hot_encoding_sparse(indices, num_classes):
     row_index = torch.arange(indices.size(0))
     indices = torch.vstack((row_index, indices))
@@ -48,6 +69,7 @@ def one_hot_encoding_sparse_np(indices, num_classes):
 
 def get_criteo_tensor(data_set_dir):
     df = pd.read_csv(data_set_dir, sep="\t", header=None)
+    df = df.sample(n=120000, random_state=17)
     click_ts = df[df.columns[0]].to_numpy()
     pay_ts = df[df.columns[1]].fillna(-1).to_numpy()
     df = df[df.columns[2:]]
@@ -55,7 +77,13 @@ def get_criteo_tensor(data_set_dir):
     df.iloc[:, :8] = df.iloc[:, :8].fillna(-1).apply(lambda x: (x - x.min()) / (x.max() - x.min()))
     df.rename(columns={col: str(col - 2) for col in df.columns}, inplace=True)
     num_samples = len(df)
+    print(f"total sample num: {num_samples}")
     return df, click_ts, pay_ts, num_samples
+    # sliced = 30000
+    # return pd.concat([df.head(sliced), df.tail(sliced)], axis=0), \
+    #        np.concatenate([click_ts[:sliced], click_ts[-sliced:]], axis=0), \
+    #        np.concatenate([pay_ts[:sliced], pay_ts[-sliced:]], axis=0), \
+    #        2 * sliced
 
 
 def linear_regression(x, input_dim, output_dim):
@@ -223,6 +251,7 @@ def load_data(params):
                 numerical_emb_concat = hstack((numerical_emb_concat, dummy_matrix))
 
         x = numerical_emb_concat.astype(int8).toarray()
+        print(f"x.shape: {x.shape}")
         # for i in range(0, 8):
         #     feat = torch.tensor(df.iloc[:, i].values)
         #     # Scale feature values to the range [0, num_bin_size[i]-1]
@@ -268,8 +297,12 @@ def load_data(params):
 
             p = linear_regression(x[index], const.CATEGORICAL_EMB_SIZE + const.NUMERICAL_EMB_SIZE, 1)
             p_list = np.concatenate((p_list, p))
-        thre = 0.8
-        p_list = [p_list < thre]
+
+        print()
+        # thre = 50
+        # thre_value = find_value_at_percentage(p_list, thre)
+        # print(f"threshold value of O at {thre}% is {thre_value}")
+        # p_list[np.where(p_list < thre_value)] = 0
         observe = np.random.binomial(size=num_samples, n=1, p=p_list)
         print("percentile for observed data: ", sum(observe) / num_samples)
         data.observe = observe

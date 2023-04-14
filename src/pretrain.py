@@ -149,6 +149,8 @@ def run(params):
         y_train = np.load("datasets/" + params['data'] + "/y_train.npy", allow_pickle=True)
         y_test = np.load("datasets/" + params['data'] + "/y_test.npy", allow_pickle=True)
 
+    print(f"train num: {y_train.shape}")
+    print(f"test num: {y_test.shape}")
     # train_data = TensorDataset(
     #     torch.tensor(x_train), torch.tensor(y_train))
     # train_data = DataLoader(
@@ -164,8 +166,7 @@ def run(params):
 
     model = get_model(params["model"], params).cuda(const.CUDA_DEVICE)
     model.fit(x_train, y_train, batch_size=1048576)
-    # train_auc = test(model, x_train, y_train, is_Training=True)
-    # print("training auc: ", train_auc)
+    # roc_auc, pr_auc = test(model, x_train, y_train, is_Training=True)
     roc_auc, pr_auc = test(model, x_test, y_test)
-    print(f"AUC-ROC: {roc_auc}, PR-AUC: {pr_auc}")
+    print(f"ROC-AUC: {roc_auc}, PR-AUC: {pr_auc}")
     # plt.show()

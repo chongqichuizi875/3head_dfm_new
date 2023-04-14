@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from loss import three_head_loss, exploss, default_bce_loss
+from loss import three_head_loss, exploss, default_bce_loss, oracle_bce_loss
 from utils import generate_meshgrid, sigmoid, compute_ips
 
 torch.manual_seed(2020)
@@ -327,6 +327,8 @@ def get_model(name, params):
         return MLP(params, three_head_loss)
     elif name == "MLP_tn_dp_default":
         return MLP(params, default_bce_loss)
+    elif name == "MLP_tn_dp_oracle":
+        return MLP(params, oracle_bce_loss)
     else:
         raise NotImplementedError()
 
@@ -375,7 +377,7 @@ class MLP(nn.Module):
         x = self.fc4(x)
         return {"C": x[:, 0], "lamb": x[:, 1], "observe": x[:, 2]}
 
-    def fit(self, x, y, num_epoch=1000, tol=1e-2, verbose=1, batch_size=1048576, lr=0.01, lamb=0):
+    def fit(self, x, y, num_epoch=100, tol=1e-2, verbose=1, batch_size=1048576, lr=0.01, lamb=0):
         optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=lamb)
         last_loss = 1e9
 

@@ -37,9 +37,13 @@ def run_params(args):
                 params["dataset"] = "tn_dp_pretrain_cut_hour_" + str(args.C)
                 params["model"] = "MLP_tn_dp_3head"
             elif args.method == "dfm":
-                params["loss"] = "3head_dfm_loss"
+                params["loss"] = "default_bce_loss"
                 params["dataset"] = "tn_dp_pretrain_cut_hour_" + str(args.C)
                 params["model"] = "MLP_tn_dp_default"
+            elif args.method == "ora":
+                params["loss"] = "oracle_bce_loss"
+                params["dataset"] = "tn_dp_pretrain_cut_hour_" + str(args.C)
+                params["model"] = "MLP_tn_dp_oracle"
             else:
                 raise ValueError(
                     "{} method do not need pretraining other than Pretrain".format(args.method))
@@ -84,9 +88,13 @@ def run_params(args):
             params["dataset"] = "coat"
             params["model"] = "MLP_tn_dp_3head"
         elif args.method == "dfm":
-            params["loss"] = "3head_dfm_loss"
+            params["loss"] = "default_bce_loss"
             params["dataset"] = "coat"
             params["model"] = "MLP_tn_dp_default"
+        elif args.method == "ora":
+            params["loss"] = "oracle_bce_loss"
+            params["dataset"] = "coat"
+            params["model"] = "MLP_tn_dp_oracle"
     elif args.data == "yahoo":
         if args.method == "ES-DFM":
             params["loss"] = "esdfm_loss"
@@ -97,9 +105,13 @@ def run_params(args):
             params["dataset"] = "yahoo"
             params["model"] = "MLP_tn_dp_3head"
         elif args.method == "dfm":
-            params["loss"] = "3head_dfm_loss"
+            params["loss"] = "default_bce_loss"
             params["dataset"] = "yahoo"
             params["model"] = "MLP_tn_dp_default"
+        elif args.method == "ora":
+            params["loss"] = "oracle_bce_loss"
+            params["dataset"] = "yahoo"
+            params["model"] = "MLP_tn_dp_oracle"
 
     return params
 
