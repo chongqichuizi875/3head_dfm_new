@@ -70,6 +70,7 @@ def linear_regression(x, input_dim, output_dim):
     p = torch.sigmoid(p).cpu().detach().numpy().reshape(-1)
     return p
 
+
 def generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item):
     x_train, y_train = shuffle(x_train, y_train)
     y_train = binarize(y_train)
@@ -134,6 +135,7 @@ def generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item)
             "test": {"x": pd.DataFrame(emb_test),
                      "labels": y_test,
                      }}
+
 
 def load_data(params):
     """ name = 'coat' or 'yahoo' """
@@ -242,7 +244,7 @@ def load_data(params):
         #         numerical_emb_concat = dummy_matrix
         #     else:
         #         numerical_emb_concat = torch.cat((numerical_emb_concat, dummy_matrix), dim=1)
-        # # 太耗内存了
+        # # 太耗内存了+太慢
         # numerical_emb = np.concatenate([pd.get_dummies(
         #     pd.cut(x[:, i], bins=num_bin_size[i]), sparse=True)
         #     for i in range(0, 8)], axis=1)
@@ -264,8 +266,10 @@ def load_data(params):
             else:
                 index = all_index[i * batch_size: (i + 1) * batch_size]
 
-            p = linear_regression(x[index].toarray(), const.CATEGORICAL_EMB_SIZE + const.NUMERICAL_EMB_SIZE, 1)
+            p = linear_regression(x[index], const.CATEGORICAL_EMB_SIZE + const.NUMERICAL_EMB_SIZE, 1)
             p_list = np.concatenate((p_list, p))
+        thre = 0.8
+        p_list = [p_list < thre]
         observe = np.random.binomial(size=num_samples, n=1, p=p_list)
         print("percentile for observed data: ", sum(observe) / num_samples)
         data.observe = observe
