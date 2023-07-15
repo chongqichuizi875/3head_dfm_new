@@ -4,7 +4,7 @@ import numpy as np
 from collections import defaultdict
 
 import torch
-
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 mse = lambda x, y: np.mean((x - y) ** 2)
 acc = lambda x, y: np.sum(x == y) / len(x)
 sigmoid = lambda x: 1 / (1 + np.exp(-x))

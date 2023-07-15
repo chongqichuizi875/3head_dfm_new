@@ -1,8 +1,16 @@
 {
-  "save_path": "run",
-  "method": "3head",
-  "mode": "pretrain",
-  "data": "yahoo",
-  "seed": 89,
-  "C": 0.25
+  "weight_decay": 0,
+  "mode": "both",
+  "data": "criteo",
+  "epoch": 100,
+  "l2_reg": 1e-6,
+  "method": "esdfm",
+  "build_data": true,
+  "batch_size": 1048576,
+  "seed": 2298839,
+  "C": 0.25,
+  "lr": 1e-2,
+  "D": 0.7,
+  "hard_share": true,
+  "save_model": true
 }

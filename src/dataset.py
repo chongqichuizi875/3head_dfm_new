@@ -1,63 +1,35 @@
-import copy
-
-from numpy import int8
-
+from torch.utils.data import Dataset
 from utils import *
-import numpy as np
 import os
-import pdb
-import const
-import torch
-from scipy.sparse import hstack, csr_matrix
-from sklearn.metrics import average_precision_score, roc_auc_score
-from sklearn.preprocessing import LabelEncoder
-from models import MF, MF_IPS, MF_SNIPS, MF_DR, MF_DR_JL
-import pandas as pd
+from numpy import int8
+import numpy as np
 from scipy import sparse as sps
-from utils import parse_float_arg
-
+from model import MF, MF_IPS, MF_SNIPS, MF_DR, MF_DR_JL
+import torch
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from scipy.sparse import hstack, csr_matrix
+import copy
 SECONDS_A_DAY = 60 * 60 * 24
 SECONDS_AN_HOUR = 60 * 60
 SECONDS_DELAY_NORM = 1
 SECONDS_FSIW_NORM = SECONDS_A_DAY * 5
-data_dir = "data"
+NUMERICAL_EMB_SIZE = 1488
+CATEGORICAL_EMB_SIZE = 2000
 num_bin_size = (64, 16, 128, 64, 128, 64, 512, 512)
 cate_bin_size = (512, 128, 256, 256, 64, 256, 256, 16, 256)
 
+def linear_regression(x, input_dim, output_dim):
+    # x: numpy
 
-def find_value_at_percentage(probs, percentage):
-    if percentage < 0 or percentage > 100:
-        raise ValueError("Percentage must be between 0 and 100")
+    x_tensor = torch.from_numpy(x).to(DEVICE).float()
 
-    sorted_probs = sorted(probs)
-    n = len(sorted_probs)
-
-    # Calculate the index corresponding to the percentage position
-    index = (n - 1) * percentage / 100
-
-    # If the index is an integer, the value is the corresponding element in the sorted list
-    if index.is_integer():
-        return sorted_probs[int(index)]
-    else:
-        # Otherwise, interpolate between the two nearest values
-        lower_index = int(index)
-        upper_index = lower_index + 1
-        weight = index - lower_index
-        return (1 - weight) * sorted_probs[lower_index] + weight * sorted_probs[upper_index]
-
-
-def one_hot_encoding_sparse(indices, num_classes):
-    row_index = torch.arange(indices.size(0))
-    indices = torch.vstack((row_index, indices))
-    values = torch.ones(indices.size(0), dtype=torch.int8)
-    one_hot_sparse = torch.sparse_coo_tensor(indices, values, (indices.size(0), num_classes))
-    return one_hot_sparse
-
-
-def one_hot_encoding(indices, num_classes):
-    one_hot = torch.zeros((indices.size(0), num_classes), dtype=torch.int8)
-    one_hot.scatter_(1, indices.unsqueeze(1), 1)
-    return one_hot
+    bn = torch.nn.BatchNorm1d(input_dim).to(DEVICE)
+    p_linear = torch.nn.Linear(input_dim, output_dim).to(DEVICE)
+    x_tensor = bn(x_tensor)
+    p = p_linear(x_tensor)
+    p = torch.sigmoid(p).cpu().detach().numpy().reshape(-1)
+    return p
 
 
 def one_hot_encoding_sparse_np(indices, num_classes):
@@ -66,6 +38,56 @@ def one_hot_encoding_sparse_np(indices, num_classes):
     one_hot_sparse = csr_matrix((data, (row_index, indices)), shape=(indices.shape[0], num_classes))
     return one_hot_sparse
 
+def rating_mat_to_sample(mat):
+    row, col = np.nonzero(mat)
+    y = mat[row, col]
+    x = np.concatenate([row.reshape(-1, 1), col.reshape(-1, 1)], axis=1)
+    return x, y
+
+def generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item, non_delay_prop=0.6):
+    x_train, y_train = shuffle(x_train, y_train)
+    y_train = binarize(y_train)
+    y_test = binarize(y_test)
+
+    y_train_sparse = sps.csr_matrix((y_train, (x_train[:, 0], x_train[:, 1])), shape=(num_user, num_item),
+                                    dtype=np.float32)  # (290, 300)
+    y_train_sparse = y_train_sparse.toarray().reshape(num_user * num_item)  # (87000, 1)
+    O_train_sparse = sps.csr_matrix((np.ones(len(x_train[:, 0])), (x_train[:, 0], x_train[:, 1])),
+                                    shape=(num_user, num_item), dtype=np.float32)
+    O_train_sparse = O_train_sparse.toarray().reshape(num_user * num_item)
+    print(f"o=1: {len(O_train_sparse[O_train_sparse==1])}")
+    print(f"y=1: {len(y_train_sparse[y_train_sparse==1])}")
+    "MF"
+    embedding_k = 8
+    mf = MF(num_user, num_item, embedding_k=embedding_k)
+    mf.to(DEVICE)
+    hyper = {"num_epoch": 5000, "batch_size": 512, "lr": 1e-2, "lamb": 1e-4, "tol": 1e-5, "verbose": 1, "G": 1}
+    # mf.fit(x_train, y_train, hyper, y_ips=O_train_sparse)
+    mf.fit(x_train, y_train, hyper, y_ips=None)
+    sample = generate_meshgrid(num_user, num_item)  # (87000, 2)
+    _, emb_train = mf.predict(torch.from_numpy(sample))  # (87000, 1), (87000, 16)
+    _, emb_test = mf.predict(torch.from_numpy(x_test))
+    sigma_h = 1
+    W_d = np.random.normal(0, sigma_h, 2 * embedding_k)  # (16,)
+    lbd = np.exp(np.dot(emb_train, W_d))  # (87000,)
+    D = np.random.exponential(lbd)  # (87000,)
+
+    L = np.quantile(D[y_train_sparse == 1], non_delay_prop)  # (1,) get the 60% value
+    ts_click = np.random.uniform(0, L, num_user * num_item)  # (87000,)
+    E = L - ts_click  # (87000,)
+    idx = (D <= E)
+    y_train = y_train_sparse * idx
+    print(sum(y_train))
+    # y_train_sparse[O_train_sparse == 0] = -1
+    E[y_train == 1] = D[y_train == 1]
+    train_labels = np.c_[np.c_[np.c_[y_train_sparse, D], y_train], E]
+    print(np.sum(train_labels, axis=0))
+    return {"train": {"x": pd.DataFrame(x_train),
+                      "labels": train_labels,
+                      "observe": O_train_sparse},
+            "test": {"x": pd.DataFrame(x_test),
+                     "labels": y_test,
+                     }}
 
 def get_criteo_tensor(data_set_dir):
     df = pd.read_csv(data_set_dir, sep="\t", header=None)
@@ -79,100 +101,15 @@ def get_criteo_tensor(data_set_dir):
     num_samples = len(df)
     print(f"total sample num: {num_samples}")
     return df, click_ts, pay_ts, num_samples
-    # sliced = 30000
-    # return pd.concat([df.head(sliced), df.tail(sliced)], axis=0), \
-    #        np.concatenate([click_ts[:sliced], click_ts[-sliced:]], axis=0), \
-    #        np.concatenate([pay_ts[:sliced], pay_ts[-sliced:]], axis=0), \
-    #        2 * sliced
 
-
-def linear_regression(x, input_dim, output_dim):
-    # x: numpy
-
-    x_tensor = torch.from_numpy(x).cuda(const.CUDA_DEVICE).float()
-
-    bn = torch.nn.BatchNorm1d(input_dim).cuda(const.CUDA_DEVICE)
-    p_linear = torch.nn.Linear(input_dim, output_dim).cuda(const.CUDA_DEVICE)
-    x_tensor = bn(x_tensor)
-    p = p_linear(x_tensor)
-    p = torch.sigmoid(p).cpu().detach().numpy().reshape(-1)
-    return p
-
-
-def generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item):
-    x_train, y_train = shuffle(x_train, y_train)
-    y_train = binarize(y_train)
-    y_test = binarize(y_test)
-
-    y_train_sparse = sps.csr_matrix((y_train, (x_train[:, 0], x_train[:, 1])), shape=(num_user, num_item),
-                                    dtype=np.float32)  # (290, 300)
-    y_train_sparse = y_train_sparse.toarray().reshape(num_user * num_item)  # (87000, 1)
-    O_train_sparse = sps.csr_matrix((np.ones(len(x_train[:, 0])), (x_train[:, 0], x_train[:, 1])),
-                                    shape=(num_user, num_item), dtype=np.float32)
-    O_train_sparse = O_train_sparse.toarray().reshape(num_user * num_item)
-
-    "MF"
-    embedding_k = 8
-    mf = MF(num_user, num_item, embedding_k=embedding_k)
-    mf.cuda(const.CUDA_DEVICE)
-    hyper = {"num_epoch": 1000, "batch_size": 8192, "lr": 0.01, "lamb": 1e-4, "tol": 1e-5, "verbose": 1, "G": 1}
-    # mf.fit(x_train, y_train, hyper, y_ips=O_train_sparse)
-    mf.fit(x_train, y_train, hyper, y_ips=None)
-    sample = generate_meshgrid(num_user, num_item)  # (87000, 2)
-    _, emb_train = mf.predict(torch.from_numpy(sample))  # (87000, 1), (87000, 16)
-    _, emb_test = mf.predict(torch.from_numpy(x_test))
-    sigma_h = 1
-    W_d = np.random.normal(0, sigma_h, 2 * embedding_k)  # (16,)
-    lbd = np.exp(np.dot(emb_train, W_d))  # (87000,)
-    D = np.random.exponential(lbd)  # (87000,)
-
-    L = np.quantile(D[y_train_sparse == 1], 0.6)  # (1,) get the 60% value
-    ts_click = np.random.uniform(0, L, num_user * num_item)  # (87000,)
-    E = L - ts_click  # (87000,)
-    idx = (D <= E)
-    y_train = y_train_sparse * idx
-    # y_train_sparse[O_train_sparse == 0] = -1
-    E[y_train == 1] = D[y_train == 1]
-    train_labels = np.c_[np.c_[np.c_[y_train_sparse, D], y_train], E]
-    # create 16+16 embedding
-    # train_x = np.array(sample)
-    # test_x = np.array(x_test)
-    # train_feat0 = train_x[:, 0]
-    # user_min = train_feat0.min()
-    # user_max = train_feat0.max()
-    # scaled_feat = ((train_feat0 - user_min) / (user_max - user_min) * 15).astype(int)
-    # train_user_emb = one_hot_encoding_sparse_np(scaled_feat, 16)
-    # test_feat0 = test_x[:, 0]
-    # scaled_feat = ((test_feat0 - user_min) / (user_max - user_min) * 15).astype(int)
-    # test_user_emb = one_hot_encoding_sparse_np(scaled_feat, 16)
-
-    # train_feat1 = train_x[:, 1]
-    # item_min = train_feat1.min()
-    # item_max = train_feat1.max()
-    # scaled_feat = ((train_feat1 - item_min) / (item_max - item_min) * 15).astype(int)
-    # train_item_emb = one_hot_encoding_sparse_np(scaled_feat, 16)
-    # test_feat1 = test_x[:, 1]
-    # scaled_feat = ((test_feat1 - item_min) / (item_max - item_min) * 15).astype(int)
-    # test_item_emb = one_hot_encoding_sparse_np(scaled_feat, 16)
-    # train_emb = hstack((train_user_emb, train_item_emb))
-    # test_emb = hstack((test_user_emb, test_item_emb))
-
-    return {"train": {"x": pd.DataFrame(emb_train),
-                      "labels": train_labels,
-                      "observe": O_train_sparse},
-            "test": {"x": pd.DataFrame(emb_test),
-                     "labels": y_test,
-                     }}
-
-
-def load_data(params):
-    """ name = 'coat' or 'yahoo' """
-    name = params["dataset"]
-
+def preprocessing(params):
+    data_dir = "data"
+    name = params["data"]
+    non_delay_prop = params["D"]
+    dataset_dir = os.path.join(data_dir, name)
     if name == "coat":
-        data_set_dir = os.path.join(data_dir, name)
-        train_file = os.path.join(data_set_dir, "train.ascii")
-        test_file = os.path.join(data_set_dir, "test.ascii")
+        train_file = os.path.join(dataset_dir, "train.ascii")
+        test_file = os.path.join(dataset_dir, "test.ascii")
         with open(train_file, "r") as f:
             train_mat = []
             for line in f.readlines():
@@ -190,24 +127,23 @@ def load_data(params):
         x_test, y_test = rating_mat_to_sample(test_mat)
         num_user = train_mat.shape[0]
         num_item = train_mat.shape[1]
-        return generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item)
+        return generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item, non_delay_prop)
 
     elif name == "yahoo":
-        data_set_dir = os.path.join(data_dir, name)
-        train_file = os.path.join(data_set_dir, "train.txt")
-        test_file = os.path.join(data_set_dir, "test.txt")
+        train_file = os.path.join(dataset_dir, "train.txt")
+        test_file = os.path.join(dataset_dir, "test.txt")
         train_mat = []
         # <user_id> <song id> <rating>
         with open(train_file, "r") as f:
             for line in f:
                 train_mat.append(line.strip().split())
         train_mat = np.array(train_mat).astype(int)
-
         test_mat = []
         # <user_id> <song id> <rating>
         with open(test_file, "r") as f:
             for line in f:
                 test_mat.append(line.strip().split())
+
         test_mat = np.array(test_mat).astype(int)
         print("===>Load from {} data set<===".format(name))
         print("[train] num data:", train_mat.shape[0])
@@ -218,16 +154,14 @@ def load_data(params):
                                            test_mat[:, :-1], test_mat[:, -1]
         x_train = x_train - 1
         x_test = x_test - 1
-        return generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item)
+        return generate_yahoo_or_coat(x_train, y_train, x_test, y_test, num_user, num_item, non_delay_prop)
 
-    elif "tn_dp_pretrain" in name:
-        data_set_dir = os.path.join(data_dir, "criteo")
-        data_set_dir = os.path.join(data_set_dir, "data.txt")
-        df, click_ts, pay_ts, num_samples = get_criteo_tensor(data_set_dir)
+    elif name == "criteo":
+        dataset_dir = os.path.join(dataset_dir, "data.txt")
+        df, click_ts, pay_ts, num_samples = get_criteo_tensor(dataset_dir)
         data = DataDF(df, click_ts, pay_ts)
         x = data.x.values
         numerical_emb_concat = None
-
         for i in range(0, 8):
             feat = x[:, i]
             # Scale feature values to the range [0, num_bin_size[i]-1]
@@ -249,40 +183,8 @@ def load_data(params):
                 numerical_emb_concat = dummy_matrix
             else:
                 numerical_emb_concat = hstack((numerical_emb_concat, dummy_matrix))
-
         x = numerical_emb_concat.astype(int8).toarray()
         print(f"x.shape: {x.shape}")
-        # for i in range(0, 8):
-        #     feat = torch.tensor(df.iloc[:, i].values)
-        #     # Scale feature values to the range [0, num_bin_size[i]-1]
-        #     scaled_feat = (feat * (num_bin_size[i] - 1)).long()
-        #     dummy_matrix = one_hot_encoding(scaled_feat, num_bin_size[i])
-        #     if numerical_emb_concat is None:
-        #         numerical_emb_concat = dummy_matrix
-        #     else:
-        #         numerical_emb_concat = torch.cat((numerical_emb_concat, dummy_matrix), dim=1)
-        #
-        # # Concatenate one-hot encoded tensors along the second dimension (columns)
-        # encoder = LabelEncoder()
-        # for i in range(8, 17):
-        #     feat = df.iloc[:, i]
-        #     feat = torch.tensor(encoder.fit_transform(feat))
-        #     scaled_feat = ((feat - feat.min()) / (feat.max() - feat.min()) * (cate_bin_size[i - 8] - 1)).long()
-        #     dummy_matrix = one_hot_encoding(scaled_feat, cate_bin_size[i - 8])
-        #     if numerical_emb_concat is None:
-        #         numerical_emb_concat = dummy_matrix
-        #     else:
-        #         numerical_emb_concat = torch.cat((numerical_emb_concat, dummy_matrix), dim=1)
-        # # 太耗内存了+太慢
-        # numerical_emb = np.concatenate([pd.get_dummies(
-        #     pd.cut(x[:, i], bins=num_bin_size[i]), sparse=True)
-        #     for i in range(0, 8)], axis=1)
-        # encoder = LabelEncoder()
-        # categorical_emb = np.concatenate(
-        #     [pd.get_dummies(
-        #         pd.cut(encoder.fit_transform(x[:, i]), bins=cate_bin_size[i - 8]), sparse=True)
-        #         for i in range(8, 16)], axis=1)
-
         p_list = np.array([])
         all_index = np.arange(num_samples)
         total_batch = 100
@@ -295,81 +197,30 @@ def load_data(params):
             else:
                 index = all_index[i * batch_size: (i + 1) * batch_size]
 
-            p = linear_regression(x[index], const.CATEGORICAL_EMB_SIZE + const.NUMERICAL_EMB_SIZE, 1)
+            p = linear_regression(x[index], CATEGORICAL_EMB_SIZE + NUMERICAL_EMB_SIZE, 1)
             p_list = np.concatenate((p_list, p))
 
         print()
-        # thre = 50
-        # thre_value = find_value_at_percentage(p_list, thre)
-        # print(f"threshold value of O at {thre}% is {thre_value}")
-        # p_list[np.where(p_list < thre_value)] = 0
         observe = np.random.binomial(size=num_samples, n=1, p=p_list)
         print("percentile for observed data: ", sum(observe) / num_samples)
         data.observe = observe
-
         data.x = pd.DataFrame(x)
+        train_data = data.sub_days(0, 30).shuffle()  # 取前30天点击的用户作为训练集
+        train_data.pay_ts[train_data.pay_ts < 0] = SECONDS_A_DAY * 30
+        delay = np.reshape(train_data.pay_ts - train_data.click_ts, (-1, 1)) / SECONDS_DELAY_NORM
+        elapse = np.reshape(SECONDS_A_DAY * 30 - train_data.click_ts, (-1, 1))
+        delayed_pay = delay > elapse
+        delayed_pay = delayed_pay.reshape(-1)
 
-        if name == "baseline_prtrain":
-            train_data = data.sub_days(0, 30).shuffle()
-            mask = train_data.pay_ts < 0
-            train_data.pay_ts[mask] = 30 * \
-                                      SECONDS_A_DAY + train_data.click_ts[mask]
-            test_data = data.sub_days(30, 60)
+        y_train = train_data.labels
+        y_train[delayed_pay] = 0  # if delay > elapse, then y=0
+        y_train[np.where(train_data.observe == 0)] = 0  # if user never observes the item, then y=0
+        y_train = np.reshape(y_train, (-1, 1))
 
-        elif "tn_dp_pretrain" in name:
-            train_data = data.sub_days(0, 30).shuffle()  # 取前30天点击的用户作为训练集
-            train_data.pay_ts[train_data.pay_ts < 0] = SECONDS_A_DAY * 30
-            delay = np.reshape(train_data.pay_ts - train_data.click_ts, (-1, 1)) / SECONDS_DELAY_NORM
-            elapse = np.reshape(SECONDS_A_DAY * 30 - train_data.click_ts, (-1, 1))
-            delayed_pay = delay > elapse
-            delayed_pay = delayed_pay.reshape(-1)
-
-            y_train = train_data.labels
-            y_train[delayed_pay] = 0  # if delay > elapse, then y=0
-            y_train[np.where(train_data.observe == 0)] = 0  # if user never observes the item, then y=0
-            # y_train[np.where(train_data.pay_ts < (SECONDS_A_DAY * 30))] = train_data.labels[
-            #     np.where(train_data.pay_ts < (SECONDS_A_DAY * 30))]
-            y_train = np.reshape(y_train, (-1, 1))
-
-            train_data.labels = np.reshape(train_data.labels, (-1, 1))
-            train_data.labels = np.concatenate(
-                [train_data.labels, delay, y_train, elapse], axis=1)
-            test_data = data.sub_days(30, 60)
-            # cut_hour = parse_float_arg(name, "cut_hour")
-            # cut_sec = int(SECONDS_AN_HOUR * cut_hour)
-            # train_data = data.sub_days(0, 30).shuffle()
-            # train_label_tn = np.reshape(train_data.pay_ts < 0, (-1, 1))
-            # train_label_dp = np.reshape(
-            #     train_data.pay_ts - train_data.click_ts > cut_sec, (-1, 1))
-            # train_label = np.reshape(train_data.pay_ts > 0, (-1, 1))
-            # train_data.labels = np.concatenate(
-            #     [train_label_tn, train_label_dp, train_label], axis=1)
-            # test_data = data.sub_days(30, 60)
-            # test_label_tn = np.reshape(test_data.pay_ts < 0, (-1, 1))
-            # test_label_dp = np.reshape(
-            #     test_data.pay_ts - test_data.click_ts > cut_sec, (-1, 1))
-            # test_label = np.reshape(test_data.pay_ts > 0, (-1, 1))
-            # test_data.labels = np.concatenate(
-            #     [test_label_tn, test_label_dp, test_label], axis=1)
-        elif "fsiw1" in name:
-            cd = parse_float_arg(name, "cd")
-            print("cd {}".format(cd))
-            train_data = data.sub_days(0, 30).shuffle()
-            test_data = data.sub_days(30, 60)
-            train_data = train_data.to_fsiw_1(
-                cd=cd * SECONDS_A_DAY, T=30 * SECONDS_A_DAY)
-            test_data = test_data.to_fsiw_1(
-                cd=cd * SECONDS_A_DAY, T=60 * SECONDS_A_DAY)
-        elif "fsiw0" in name:
-            cd = parse_float_arg(name, "cd")
-            train_data = data.sub_days(0, 30).shuffle()
-            test_data = data.sub_days(30, 60)
-            train_data = train_data.to_fsiw_0(
-                cd=cd * SECONDS_A_DAY, T=30 * SECONDS_A_DAY)
-            test_data = test_data.to_fsiw_0(
-                cd=cd * SECONDS_A_DAY, T=60 * SECONDS_A_DAY)
-        else:
-            raise NotImplementedError("{} dataset does not exist".format(name))
+        train_data.labels = np.reshape(train_data.labels, (-1, 1))
+        train_data.labels = np.concatenate(
+            [train_data.labels, delay, y_train, elapse], axis=1)
+        test_data = data.sub_days(30, 60)
 
         return {"train": {"x": train_data.x,
                           "click_ts": train_data.click_ts,
@@ -386,14 +237,6 @@ def load_data(params):
 
     print("Cant find the data set", name)
     return
-
-
-def rating_mat_to_sample(mat):
-    row, col = np.nonzero(mat)
-    y = mat[row, col]
-    x = np.concatenate([row.reshape(-1, 1), col.reshape(-1, 1)], axis=1)
-    return x, y
-
 
 class DataDF():
     def __init__(self, features, click_ts, pay_ts, observe=None, sample_ts=None, labels=None, delay_label=None):
